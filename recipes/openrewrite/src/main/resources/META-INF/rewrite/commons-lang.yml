@@ -1,0 +1,21 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.atlassian.dc.p9enablement.migrate.MigrateRepackagedCommonsLang
+displayName: Migrate off the legacy repackaged Commons Lang namespace
+description: >-
+  Rewrites imports/references from the legacy repackaged
+  com.atlassian.gzipfilter.org.apache.commons.lang.* namespace to the real
+  org.apache.commons.lang.* classes and adds commons-lang:commons-lang:2.6 as a
+  direct application dependency.
+recipeList:
+  # Run this before ChangePackage because onlyIfUsing matches the original repackaged name.
+  - org.openrewrite.maven.AddDependency:
+      groupId: commons-lang
+      artifactId: commons-lang
+      version: 2.6
+      scope: compile
+      onlyIfUsing: com.atlassian.gzipfilter.org.apache.commons.lang..*
+  - org.openrewrite.java.ChangePackage:
+      oldPackageName: com.atlassian.gzipfilter.org.apache.commons.lang
+      newPackageName: org.apache.commons.lang
+      recursive: true

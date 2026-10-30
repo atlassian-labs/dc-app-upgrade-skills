@@ -207,6 +207,21 @@ String body = httpClient.execute(request, response -> {
 });
 ```
 
+### Response charset defaults
+
+HC4 `ContentType.getOrDefault(entity)` supplies ISO-8859-1 when the header is
+absent; HC5 `ContentType.DEFAULT_TEXT` uses UTF-8. Preserve the original fallback
+explicitly when replacing that call:
+
+```java
+ContentType type = ContentType.parse(entity.getContentType());
+Charset charset = type == null ? StandardCharsets.ISO_8859_1 : type.getCharset();
+```
+
+Keep the caller's existing fallback when a present header has no charset
+(for example, `Charset.defaultCharset()`). Do not replace every missing charset
+with ISO-8859-1. Honor explicit charsets unchanged.
+
 ### Preemptive basic authentication
 
 Before:

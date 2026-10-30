@@ -14,13 +14,10 @@ Use this skill when the user asks to:
 
 ## Workflow
 
-1. Using the [migration guide](#migration-guide) below, assess whether there are
-   any files to migrate. Scan the selected Maven module **and any sibling module
-   whose classes are bundled into the plugin artifact** (Maven
-   `Embedded-Dependencies` / shaded/embedded jars). Executable Jackson 2 usage in
-   an embedded module ships inside the plugin and breaks at runtime just like
-   usage in the selected module, so treat those modules' `src/` and `pom.xml` as
-   migration targets too when the caller lists them in scope.
+1. **Scope:** All requested Maven plugin/library modules and actual in-scope
+   embedded/shaded modules (`Embedded-Dependencies` or equivalent). Assess their
+   sources and POMs below. Library API migration needs no product target;
+   descriptor/manifest changes apply only to actual plugin packaging.
 2. If there is nothing to migrate, **exit** (see [When to skip](#when-to-skip)).
 3. Otherwise migrate **file by file**, in this order:
    - **`pom.xml` (add):** add the Jackson 3 dependencies *alongside* the existing
@@ -28,6 +25,11 @@ Use this skill when the user asks to:
      Match each new dependency's `<scope>` to the Jackson 2 dependency it replaces
      (a `provided` platform dependency stays `provided`; see
      [Preserve the original dependency scope](#1-maven-dependency-migration)).
+     If the imported BOM no longer manages Jackson 2 (Maven rejects the POM with
+     `'dependencies.dependency.version' for com.fasterxml.jackson.core:jackson-databind:jar is missing`),
+     the side-by-side step is impossible: swap the coordinates in one step and
+     migrate the sources against Jackson 3 only. See
+     [Multi-module reactors](#multi-module-reactors).
    - **Java sources:** migrate each file, then run `mvn clean compile` and
      `mvn test` in the module. Update the corresponding unit tests too.
    - **Other files:** e.g. `atlassian-plugin.xml`.
@@ -38,7 +40,7 @@ Use this skill when the user asks to:
 4. At the end, print a table with two columns: **file** and a **brief description
    of the changes**.
 
-> **Tip — incremental & safe:** Add the new dependencies first, migrate the code
+> **Tip — incremental & safe:** While the BOM still manages Jackson 2, add the new dependencies first, migrate the code
 > (running unit tests as you go), then remove the old dependencies last and
 > re-run `mvn clean compile`. This lets every file be migrated with no
 > compilation errors and keeps the tests runnable at each granular step.
@@ -90,6 +92,22 @@ If you hit this, the migrated Jackson dependency (or the retained
 `provided`. Only bundle Jackson when the original dependency was compile/default
 scope *and* the target platform does not export it.
 
+**A `provided` Jackson 3 module must also be public on the target.** Keeping
+`provided` is only correct when the target product exports the Jackson 3
+packages to apps. Check every `provided` Jackson 3 module's packages against the
+target's public packages (`check-public-api-readiness`, or the product's OSGi
+export list) — not just `jackson-core`/`jackson-databind`. Known example:
+`tools.jackson.module.jakarta.xmlbind` is internal on Jira 12, so a plugin that
+keeps `jackson-module-jakarta-xmlbind-annotations` `provided` fails to resolve
+there. For a module that is not public, bundle it (compile scope) or remove the
+code that uses it (for xmlbind, the JAXB annotation introspector).
+
+**Java release floor.** Jackson 3 requires Java 17. A module compiled with
+`maven.compiler.release` / `<release>` below 17 (e.g. a client library at 8)
+still compiles against Jackson 3's class files without a warning, but no longer
+runs on the lower Java version it promises. Report this as a compatibility
+break: raise the module's release to 17+, or keep that library off Jackson 3.
+
 **Version management:** manage versions via the `dependencyManagement` section by
 importing the BOM that defines the library versions. If
 `com.atlassian.platform.dependencies:platform-internal-api` or
@@ -98,6 +116,23 @@ importing the BOM that defines the library versions. If
 
 > Do **not** hard-code a milestone/QR version — confirm the current
 > Platform 9-compatible `platform-*-api` version against official DC Core guidance.
+
+### Multi-module reactors
+
+Once the bumped BOM stops managing Jackson 2, every reactor POM that still
+declares a versionless Jackson 2 dependency is invalid, and Maven cannot load
+the reactor at all — so per-module `mvn -pl <module> -am` fails before reaching
+the module you migrated. Either:
+
+- swap the Jackson coordinates in **all** reactor POMs first, as one sub-step,
+  then migrate and verify sources module by module; or
+- validate one module at a time with `mvn -N install` on the parent, then
+  `mvn -f <module>/pom.xml …`.
+
+Reinstall each sibling (`mvn -f <sibling>/pom.xml install`) after its POM swap.
+A previously installed, now-invalid sibling POM in `~/.m2` can silently drop its
+transitive dependencies, which surfaces as misleading compile errors (missing
+classes unrelated to Jackson) in the modules that depend on it.
 
 ## 2. Package renaming (import statements)
 
@@ -312,9 +347,8 @@ In `atlassian-plugin.xml`, find every `<rest …>` tag and ensure it declares
 
 ## When to skip
 
-- If neither the selected module nor any in-scope embedded module has **any
-  Jackson 2 usages**, do not migrate. A clean selected module is not sufficient
-  when an embedded/bundled sibling module still carries executable Jackson 2 code.
+- Skip only when **every** requested source and actual in-scope embedded module
+  is free of Jackson 2 usage; one clean module does not clear the others.
 - If the module only needs a version bump of
   `com.atlassian.platform.dependencies:platform-internal-api` /
   `platform-public-api`, do not migrate it.
@@ -355,6 +389,8 @@ mvn -q clean compile
 
 - [ ] Update Maven/Gradle dependencies (groupId changes)
 - [ ] Preserve each dependency's original `<scope>` (keep `provided` platform Jackson `provided`; do not bundle platform artifacts)
+- [ ] Check every `provided` Jackson 3 module is public on the target product; bundle or drop the ones that are not
+- [ ] Report any module with `release` below 17 as a compatibility break
 - [ ] Keep `jackson-annotations` with the old groupId (and its original scope)
 - [ ] Remove integrated modules (parameter-names, jdk8, jsr310)
 - [ ] Update all import statements, per the tables in [Package renaming](#2-package-renaming-import-statements) — a blanket `com.fasterxml.` → `tools.jackson` rename is not sufficient on its own
